@@ -1,0 +1,52 @@
+
+import base64
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from app.core.config import settings
+
+
+def get_encryption_key() -> bytes:
+    key = settings.ENCRYPTION_KEY
+
+    if not key:
+        raise RuntimeError("ENCRYPTION_KEY is not configured.")
+
+    try:
+        decoded = base64.urlsafe_b64decode(key)
+    except Exception as exc:
+        raise RuntimeError("Invalid ENCRYPTION_KEY.") from exc
+
+    if len(decoded) != 32:
+        raise RuntimeError("ENCRYPTION_KEY must decode to exactly 32 bytes.")
+
+    return decoded
+
+
+def encrypt_data(plaintext: str) -> str:
+    if not plaintext:
+        raise ValueError("Plaintext cannot be empty.")
+
+    nonce = __import__("os").urandom(12)
+    encrypted = AESGCM(get_encryption_key()).encrypt(
+        nonce,
+        plaintext.encode("utf-8"),
+        None,
+    )
+
+    return base64.urlsafe_b64encode(nonce + encrypted).decode("utf-8")
+
+
+def decrypt_data(ciphertext: str) -> str:
+    raw = base64.urlsafe_b64decode(ciphertext)
+
+    nonce = raw[:12]
+    encrypted = raw[12:]
+
+    decrypted = AESGCM(get_encryption_key()).decrypt(
+        nonce,
+        encrypted,
+        None,
+    )
+
+    return decrypted.decode("utf-8")

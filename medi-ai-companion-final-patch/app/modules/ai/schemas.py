@@ -1,0 +1,180 @@
+from datetime import date, datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from uuid import UUID
+
+
+class AIRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = Field(default=None, min_length=36, max_length=36)
+    locale: Literal["en", "bn"] = "en"
+    use_conversation_history: bool = Field(
+        default=False,
+        description="Explicitly include earlier messages from this owned conversation for continuity.",
+    )
+
+    @field_validator("conversation_id")
+    @classmethod
+    def validate_conversation_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        try:
+            return str(UUID(value))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("conversation_id must be a UUID.") from exc
+
+
+class AIFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    rating: Literal["helpful", "not_helpful"]
+    comment: str | None = Field(default=None, max_length=1000)
+
+
+class CitationResponse(BaseModel):
+    source_id: str | None = None
+    source_name: str | None = None
+    source_url: str | None = None
+    source_reference: str | None = None
+    document_id: str | None = None
+    document_title: str | None = None
+    document_version: int | None = None
+    chunk_id: str | None = None
+    publisher: str | None = None
+    publication_date: str | None = None
+    retrieved_at: str | None = None
+    trust_classification: str | None = None
+    freshness: str | None = None
+    citation_type: str = "knowledge"
+    catalog_id: str | None = None
+    title: str | None = None
+    last_verified_at: str | None = None
+    claim_ids: list[str] = Field(default_factory=list)
+
+
+class ClaimEvidenceResponse(BaseModel):
+    claim_id: str
+    text: str
+    supported: bool
+    citation_ids: list[str] = Field(default_factory=list)
+
+
+class AIChatResponse(BaseModel):
+    conversation_id: str
+    response: str
+    personalization_used: bool
+    evidence_available: bool
+    citations: list[CitationResponse]
+    safety_indicators: list[str]
+    claim_evidence: list[ClaimEvidenceResponse] = Field(default_factory=list)
+    conversation_history_used: bool = False
+
+
+class ConversationSummary(BaseModel):
+    conversation_id: str
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationListResponse(BaseModel):
+    items: list[ConversationSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class MessageResponse(BaseModel):
+    message_id: str
+    role: Literal["user", "assistant", "system"]
+    content: str
+    citations: list[CitationResponse] = Field(default_factory=list)
+    created_at: datetime
+
+
+class ConversationResponse(BaseModel):
+    conversation_id: str
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+    messages: list[MessageResponse]
+    total_messages: int
+    limit: int
+    offset: int
+
+
+class ContextStatusResponse(BaseModel):
+    personalization_enabled: bool
+    message: str
+
+
+class WeeklyMedicationFacts(BaseModel):
+    scheduled_doses: int
+    taken_doses: int
+    missed_doses: int
+    skipped_doses: int
+    pending_doses: int
+    cancelled_doses: int
+    unclassified_doses: int
+    duplicate_records_ignored: int
+    adherence_denominator: int
+    adherence_percentage: float | None
+
+
+class WeeklyMedicationInsightResponse(BaseModel):
+    timezone_name: str
+    period_start_local: datetime
+    period_end_local_exclusive: datetime
+    period_start_utc: datetime
+    period_end_utc_exclusive: datetime
+    recorded_facts: WeeklyMedicationFacts
+    observations: list[str]
+
+
+class WeeklyHealthMetric(BaseModel):
+    observations: int
+    average: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    first_recorded: float | None = None
+    latest_recorded: float | None = None
+    change_first_to_latest: float | None = None
+
+
+class WeeklyHealthSymptomCount(BaseModel):
+    symptom: str
+    days_reported: int
+
+
+class WeeklyHealthInsightResponse(BaseModel):
+    timezone_name: str
+    period_start_local: date
+    period_end_local: date
+    checkins_recorded: int
+    days_without_checkin: int
+    metrics: dict[str, WeeklyHealthMetric]
+    reported_categories: dict[str, dict[str, int]] = Field(default_factory=dict)
+    symptom_counts: list[WeeklyHealthSymptomCount] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class FeedbackResponse(BaseModel):
+    success: bool
+    message_id: str
+
+
+class DailyGuidanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    locale: Literal["en", "bn"] = "en"
+
+
+class DailyGuidanceResponse(BaseModel):
+    guidance: str
+    personalization_used: bool
+    evidence_available: bool
+    citations: list[CitationResponse] = Field(default_factory=list)
+    safety_indicators: list[str] = Field(default_factory=list)
+    claim_evidence: list[ClaimEvidenceResponse] = Field(default_factory=list)

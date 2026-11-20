@@ -1,0 +1,182 @@
+"""Consent-gated weekly summaries of user-reported health check-ins.
+
+This module reports descriptive trends only. It does not diagnose, classify
+clinical risk, or convert self-reported observations into medical facts.
+"""
+
+import math
+from collections import Counter
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.ai.context_service import get_context_permissions
+from app.modules.health.checkin_service import list_checkins
+
+
+NUMERIC_FIELDS = (
+    "sleep_duration_hours",
+    "water_intake_liters",
+    "physical_activity_minutes",
+    "screen_time_hours",
+    "wellbeing_level",
+    "energy_level",
+)
+
+CATEGORY_FIELDS = (
+    "sleep_quality",
+    "physical_activity",
+    "eating_habits",
+)
+
+
+def _number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _safe_category(value):
+    if not isinstance(value, str):
+        return None
+    value = " ".join(value.replace("\x00", "").split())
+    return value[:80] if value else None
+
+
+async def get_weekly_health_insight(
+    db: AsyncSession,
+    user_id: str,
+    *,
+    timezone_name: str,
+    today: date | None = None,
+) -> dict:
+    """Summarize the previous seven completed local days of check-ins."""
+    try:
+        user_tz = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A valid IANA timezone is required.",
+        ) from exc
+
+    try:
+        allowed, personal_data_allowed = await get_context_permissions(
+            db, user_id, purpose="interactive",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Weekly health insight is temporarily unavailable.",
+        ) from exc
+
+    if not allowed or not personal_data_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Interactive AI personalization consent is required for this insight.",
+        )
+
+    local_today = today or datetime.now(user_tz).date()
+    period_start = local_today - timedelta(days=7)
+    period_end = local_today - timedelta(days=1)
+
+    try:
+        records = await list_checkins(
+            db,
+            user_id,
+            start_date=period_start,
+            end_date=period_end,
+            limit=100,
+            offset=0,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Weekly health insight is temporarily unavailable.",
+        ) from exc
+
+    records = sorted(records, key=lambda item: item["local_date"])
+    numeric_values = {field: [] for field in NUMERIC_FIELDS}
+    category_counts = {field: Counter() for field in CATEGORY_FIELDS}
+    symptom_days = {}
+    symptom_labels = {}
+    notes = [
+        "self_reported_checkins_only",
+        "not_a_diagnosis_or_clinical_assessment",
+        "missing_days_are_not_interpreted_as_negative_symptoms",
+        "numeric_averages_use_only_days_with_recorded_values",
+    ]
+
+    for record in records:
+        data = record.get("data")
+        if not isinstance(data, dict):
+            continue
+        for field in NUMERIC_FIELDS:
+            value = _number(data.get(field))
+            if value is not None:
+                numeric_values[field].append((record["local_date"], value))
+        for field in CATEGORY_FIELDS:
+            value = _safe_category(data.get(field))
+            if value:
+                category_counts[field][value] += 1
+        symptoms = data.get("symptoms")
+        if isinstance(symptoms, list):
+            for raw in symptoms[:10]:
+                label = _safe_category(raw)
+                if label:
+                    key = label.casefold()
+                    symptom_days.setdefault(key, set()).add(record["local_date"])
+                    symptom_labels.setdefault(key, label)
+
+    metrics = {}
+    for field, dated_values in numeric_values.items():
+        values = [value for _, value in dated_values]
+        if not values:
+            metrics[field] = {
+                "observations": 0,
+                "average": None,
+                "minimum": None,
+                "maximum": None,
+                "first_recorded": None,
+                "latest_recorded": None,
+                "change_first_to_latest": None,
+            }
+            continue
+        first = values[0]
+        latest = values[-1]
+        metrics[field] = {
+            "observations": len(values),
+            "average": round(sum(values) / len(values), 2),
+            "minimum": round(min(values), 2),
+            "maximum": round(max(values), 2),
+            "first_recorded": round(first, 2),
+            "latest_recorded": round(latest, 2),
+            "change_first_to_latest": round(latest - first, 2),
+        }
+
+    reported_categories = {
+        field: dict(counts.most_common(10))
+        for field, counts in category_counts.items()
+        if counts
+    }
+    symptoms = [
+        {"symptom": symptom_labels[key], "days_reported": len(days)}
+        for key, days in sorted(
+            symptom_days.items(), key=lambda item: (-len(item[1]), item[0])
+        )[:10]
+    ]
+    checkin_dates = {record["local_date"] for record in records}
+
+    return {
+        "timezone_name": user_tz.key,
+        "period_start_local": period_start,
+        "period_end_local": period_end,
+        "checkins_recorded": len(records),
+        "days_without_checkin": max(0, 7 - len(checkin_dates)),
+        "metrics": metrics,
+        "reported_categories": reported_categories,
+        "symptom_counts": symptoms,
+        "notes": notes,
+    }

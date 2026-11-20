@@ -1,0 +1,36 @@
+
+# MEDI Backend - Runtime Dependencies
+
+fastapi==0.163.0
+uvicorn[standard]==0.54.0
+
+# Database and migrations
+SQLAlchemy==2.1.8
+asyncpg==0.32.0
+alembic==1.20.1
+
+# Configuration and validation
+pydantic==2.14.3
+pydantic-settings==2.16.3
+email-validator==2.3.0
+python-dotenv==1.2.4
+
+# Optional provider HTTP transport (the Ollama service/model remains optional)
+httpx==0.28.1
+
+# Authentication and security
+cryptography==50.0.2
+pwdlib[argon2]==0.4.0
+
+# File uploads and prescription OCR
+python-multipart==0.0.33
+Pillow==13.0.0
+pytesseract==0.3.13
+PyMuPDF==2.1
+
+# Timezone support
+tzdata==2026.6
+
+# Testing
+pytest==9.2.0
+pytest-asyncio==1.5.0
